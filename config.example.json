@@ -1,0 +1,7 @@
+{
+  "serverUrl": "https://your-server.com",
+  "deviceId": "REPLACE_AFTER_REGISTRATION",
+  "deviceToken": "REPLACE_AFTER_REGISTRATION",
+  "deviceType": "PC",
+  "metricsIntervalMs": 30000
+}
