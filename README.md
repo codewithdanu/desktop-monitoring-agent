@@ -87,4 +87,33 @@ schtasks /create /tn "DeviceAgent" /tr "node C:\path\to\agent.js" /sc onlogon /f
 
 1. **BIOS**: Enable "Wake on LAN" / "PME Wake Up" in Power Management
 2. **Windows NIC**: Device Manager → NIC → Properties → Power Management → "Allow to wake computer" + Advanced → "Wake on Magic Packet"
-3. **Get MAC**: `getmac /v /fo list` (Windows) or `ifconfig | grep ether` (Mac/Linux)
+3. **Get MAC**: See the [Finding Your MAC Address](#finding-your-mac-address) section below.
+
+## Finding Your MAC Address
+
+You need your **Physical Address** (MAC) for Wake-on-LAN. Ensure you use the address of your **Ethernet (Wired)** or **Wi-Fi** adapter that is actually connected to the network.
+
+### Windows (Command Prompt or PowerShell)
+```cmd
+getmac /v /fo list
+```
+*Look for "Physical Address" under the adapter you are using.*
+
+Alternatively:
+```cmd
+ipconfig /all
+```
+
+### macOS
+```bash
+networksetup -getmacaddress en0
+```
+*Note: `en0` is usually Wi-Fi, `en1` might be Ethernet.*
+
+### Linux
+```bash
+ip link show
+# or
+ifconfig | grep ether
+```
+
