@@ -17,17 +17,39 @@ const path  = require('path');
 // ─── CONFIGURATION ────────────────────────────────────────────────────────────
 // Load values from .env file
 const SERVER      = process.env.SERVER_URL   || 'http://localhost:3000';
-const USER_TOKEN  = process.env.USER_TOKEN   || '';
+const USERNAME    = process.env.AGENT_USERNAME;
+const PASSWORD    = process.env.AGENT_PASSWORD;
+let   USER_TOKEN  = process.env.USER_TOKEN;
 const DEVICE_TYPE = process.env.DEVICE_TYPE || 'PC';
 const MAC_ADDRESS = process.env.MAC_ADDRESS || '';
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Get MAC: Windows → getmac /v /fo list | Linux/Mac → ifconfig | grep ether
-// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Automatically get a token if missing
+ */
+async function autoLogin() {
+  if (USER_TOKEN) return USER_TOKEN;
+
+  if (!USERNAME || !PASSWORD) {
+    throw new Error('USER_TOKEN is missing. Provide it or set AGENT_USERNAME & AGENT_PASSWORD in .env');
+  }
+
+  console.log(`[Auth] Attempting login for user: ${USERNAME}...`);
+  const { data } = await axios.post(`${SERVER}/api/auth/login`, {
+    username: USERNAME,
+    password: PASSWORD
+  });
+  
+  console.log('✅ Login successful!');
+  return data.token;
+}
 
 async function register() {
   try {
+    // 1. Get Token (Auto-login if needed)
+    USER_TOKEN = await autoLogin();
+
     console.log(`[Register] Connecting to ${SERVER}...`);
 
     const { data } = await axios.post(
@@ -43,6 +65,7 @@ async function register() {
         timeout: 10000,
       }
     );
+
 
     const config = {
       serverUrl:        SERVER,
