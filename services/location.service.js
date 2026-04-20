@@ -2,8 +2,62 @@
  * Location Service
  * Handles geolocation via Google Maps and IP fallback.
  */
+const { exec } = require('child_process');
 const axios = require('axios');
 const wifiService = require('./wifi.service');
+
+/**
+ * Gets high-precision location on macOS using native CoreLocation via Swift.
+ * This is building-level accuracy (±10m).
+ */
+async function getNativeMacLocation() {
+  return new Promise((resolve, reject) => {
+    const swiftCode = `
+import CoreLocation
+import Foundation
+
+class Delegate: NSObject, CLLocationManagerDelegate {
+    let manager = CLLocationManager()
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        if let loc = locations.last {
+            print("\\(loc.coordinate.latitude),\\(loc.coordinate.longitude),\\(loc.horizontalAccuracy)")
+            exit(0)
+        }
+    }
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        exit(1)
+    }
+}
+
+let delegate = Delegate()
+delegate.manager.delegate = delegate
+delegate.manager.desiredAccuracy = kCLLocationAccuracyBest
+delegate.manager.startUpdatingLocation()
+
+let start = Date()
+while Date().timeIntervalSince(start) < 5 {
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+}
+exit(1)
+    `.trim();
+
+    exec(`swift -e '${swiftCode}'`, (error, stdout, stderr) => {
+      if (error || !stdout.trim()) {
+        return reject(new Error('Native macOS location failed or denied'));
+      }
+      const parts = stdout.trim().split(',');
+      if (parts.length >= 2) {
+        resolve({
+          lat: parseFloat(parts[0]),
+          lon: parseFloat(parts[1]),
+          accuracy: parseFloat(parts[2]) || 10
+        });
+      } else {
+        reject(new Error('Invalid output from native location script'));
+      }
+    });
+  });
+}
 
 /**
  * Fetches the current location data using WiFi triangulation or IP fallback.
@@ -13,6 +67,21 @@ const wifiService = require('./wifi.service');
 async function getCurrentLocation(config) {
   let locationData = null;
   let method = 'Unknown';
+
+  // 0. Try native macOS location first (HIGHEST PRECISION)
+  if (process.platform === 'darwin') {
+    try {
+      console.log(`[Location Service] Trying native macOS CoreLocation...`);
+      const nativeLoc = await getNativeMacLocation();
+      if (nativeLoc) {
+        console.log(`[Location Service] Native Mac location successful (accuracy: ${nativeLoc.accuracy}m)`);
+        return { ...nativeLoc, method: 'macOS-Native' };
+      }
+    } catch (err) {
+      console.warn(`[Location Service] Native Mac location failed: ${err.message}`);
+      console.log(`[Location Service] Falling back to WiFi/IP methods...`);
+    }
+  }
 
   // 1. Try WiFi Triangulation or Google-IP Triangulation
   if (config.googleMapsApiKey) {
