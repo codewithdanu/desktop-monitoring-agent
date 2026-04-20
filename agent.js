@@ -6,6 +6,12 @@ const { io } = require('socket.io-client');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
+const wifi = require('node-wifi');
+
+// Initialize wifi module
+wifi.init({
+  iface: null // use default interface
+});
 
 // Load config
 const configPath = path.join(__dirname, 'config.json');
@@ -69,21 +75,70 @@ async function sendMetrics() {
 // ---- LOCATION ----
 async function sendLocation() {
   try {
-    // Fetch geolocation based on Public IP
-    const response = await axios.get('http://ip-api.com/json');
-    if (response.data && response.data.status === 'success') {
-      const { lat, lon, city, regionName, country } = response.data;
-      
+    let locationData = null;
+    let method = 'IP';
+
+    // 1. Try WiFi Triangulation (if token exists)
+    if (config.unwiredLabsToken) {
+      try {
+        console.log('[Agent] Scanning WiFi networks for triangulation...');
+        const networks = await wifi.scan();
+        
+        if (networks && networks.length > 0) {
+          // Format networks for Unwired Labs API
+          const wifiList = networks.map(nw => ({
+            bssid:  nw.mac,
+            signal: nw.signal_level
+          }));
+
+          const response = await axios.post('https://us1.unwiredlabs.com/v2/process.php', {
+            token: config.unwiredLabsToken,
+            wifi:  wifiList,
+            address: 1,
+            fallback: 'ip'
+          });
+
+          if (response.data && response.data.status === 'ok') {
+            locationData = {
+              lat: response.data.lat,
+              lon: response.data.lon,
+              accuracy: response.data.accuracy,
+              address: response.data.address
+            };
+            method = 'WiFi';
+          }
+        }
+      } catch (wifiErr) {
+        console.warn('[Agent] WiFi triangulation failed, falling back to IP:', wifiErr.message);
+      }
+    }
+
+    // 2. Fallback to IP-based tracking
+    if (!locationData) {
+      const response = await axios.get('http://ip-api.com/json');
+      if (response.data && response.data.status === 'success') {
+        locationData = {
+          lat: response.data.lat,
+          lon: response.data.lon,
+          city: response.data.city,
+          accuracy: 5000 // IP accuracy is usually city-level
+        };
+      }
+    }
+
+    if (locationData) {
       socket.emit('agent:location', {
         deviceId:    config.deviceId,
-        latitude:    lat,
-        longitude:   lon,
+        latitude:    locationData.lat,
+        longitude:   locationData.lon,
+        accuracy_meters: locationData.accuracy,
         recorded_at: new Date().toISOString()
       });
       
-      console.log(`[Agent] Location updated: ${city}, ${regionName}, ${country} (${lat}, ${lon})`);
+      const debugInfo = locationData.address || locationData.city || 'Unknown';
+      console.log(`[Agent] Location updated via ${method} (${debugInfo}): ${locationData.lat}, ${locationData.lon}`);
     } else {
-      console.warn('[Agent] Geolocation failed:', response.data.message || 'Unknown error');
+      console.error('[Agent] All geolocation methods failed.');
     }
   } catch (err) {
     console.error('[Agent] Failed to fetch geolocation:', err.message);
