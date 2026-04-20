@@ -1,7 +1,8 @@
 {
-  "serverUrl": "https://your-server.com",
-  "deviceId": "REPLACE_AFTER_REGISTRATION",
-  "deviceToken": "REPLACE_AFTER_REGISTRATION",
-  "deviceType": "PC",
-  "metricsIntervalMs": 30000
+  "serverUrl": "https://your-backend-api.com",
+  "deviceId": "unique-device-id",
+  "deviceToken": "your-secure-device-token",
+  "googleMapsApiKey": "YOUR_GOOGLE_MAPS_GEOLOCATION_API_KEY",
+  "metricsIntervalMs": 30000,
+  "locationIntervalMs": 900000
 }
