@@ -18,8 +18,9 @@ async function scan() {
     if (isWin) {
       command = 'netsh wlan show networks mode=bssid';
     } else if (isMac) {
-      // Use native Swift for CoreWLAN scan (most reliable on macOS Sonoma/Sequoia)
-      command = `swift -e 'import CoreWLAN; if let interface = CWWiFiClient.shared().interface() { if let networks = try? interface.scanForNetworks(withSSID: nil) { for n in networks { print("\(n.bssid ?? "??") | \(n.rssiValue) | \(n.wlanChannel.channelNumber)") } } }'`;
+      // Use native Swift with improved escaping and type safety
+      const swiftCode = 'import CoreWLAN; if let i = CWWiFiClient.shared().interface(), let ns = try? i.scanForNetworks(withSSID: nil) { for n in ns { let b = n.bssid ?? "??"; print(b, n.rssiValue, n.wlanChannel.channelNumber, separator: " | ") } }';
+      command = `swift -e '${swiftCode}'`;
     } else if (isLin) {
       command = 'nmcli -t -f BSSID,SIGNAL,CHAN dev wifi list';
     } else {
@@ -30,6 +31,22 @@ async function scan() {
 
     exec(command, (error, stdout, stderr) => {
       if (error) {
+        // Fallback for strict Swift versions where bssid is non-optional String
+        if (error.message.includes('non-optional')) {
+          const fallbackSwift = 'import CoreWLAN; if let i = CWWiFiClient.shared().interface(), let ns = try? i.scanForNetworks(withSSID: nil) { for n in ns { print(n.bssid, n.rssiValue, n.wlanChannel.channelNumber, separator: " | ") } }';
+          exec(`swift -e '${fallbackSwift}'`, (err2, out2) => {
+            if (err2) {
+              console.error(`[WiFi Service] Swift fallback failed: ${err2.message}`);
+              resolve([]);
+            } else {
+              parseMac(out2, bssids);
+              console.log(`[WiFi Service] Scan finished via fallback. Found ${bssids.length} networks.`);
+              resolve(bssids);
+            }
+          });
+          return;
+        }
+
         console.error(`[WiFi Service] Command failed: ${error.message}`);
         if (stderr) console.error(`[WiFi Service] Stderr: ${stderr}`);
         resolve([]);
@@ -87,11 +104,16 @@ function parseMac(stdout, bssids) {
   for (const line of lines) {
     if (!line.includes('|')) continue;
     
-    const [mac, rssi, channel] = line.split('|').map(s => s.trim());
+    const parts = line.split('|').map(s => s.trim());
+    if (parts.length < 2) continue;
+
+    const mac = parts[0];
+    const rssi = parts[1];
+    const channel = parts[2] || '0';
     
-    if (mac === '??') {
+    if (mac === '??' || mac === '00:00:00:00:00:00' || mac === 'nil') {
       if (!permissionWarningShown) {
-        console.warn('[WiFi Service] macOS is censoring BSSIDs (??). PLEASE ENABLE "Location Services" FOR TERMINAL in System Settings!');
+        console.warn('[WiFi Service] macOS is censoring BSSIDs. PLEASE ENABLE "Location Services" FOR TERMINAL in System Settings!');
         permissionWarningShown = true;
       }
       continue;
