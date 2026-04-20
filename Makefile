@@ -1,7 +1,7 @@
 # Desktop Agent — Makefile
 # Memudahkan pengelolaan agent di Windows/Linux
 
-.PHONY: setup register start stop restart logs status clean
+.PHONY: setup register start stop restart logs status clean clean-logs
 
 # 1. Setup awal: Install dependensi
 setup:
