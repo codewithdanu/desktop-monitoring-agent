@@ -43,6 +43,8 @@ async function getCurrentLocation(config) {
           };
           method = 'Google';
         }
+      } else {
+        console.warn(`[Location Service] No WiFi networks found during scan. Check Location Services permissions.`);
       }
     } catch (wifiErr) {
       console.warn(`[Location Service] WiFi triangulation failed: ${wifiErr.message}`);
@@ -51,6 +53,12 @@ async function getCurrentLocation(config) {
 
   // 2. Fallback to IP-based tracking if WiFi results are missing or highly inaccurate (>20km)
   if (!locationData || locationData.accuracy > 20000) {
+    if (locationData && locationData.accuracy > 20000) {
+      console.log(`[Location Service] Google accuracy low (${Math.round(locationData.accuracy)}m), using IP fallback.`);
+    } else if (!locationData) {
+      console.log(`[Location Service] WiFi scan empty, using IP fallback.`);
+    }
+    
     try {
       const response = await axios.get('http://ip-api.com/json');
       if (response.data && response.data.status === 'success') {

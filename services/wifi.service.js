@@ -36,15 +36,21 @@ async function scan() {
       return;
     }
 
-    exec(command, (error, stdout) => {
+    exec(command, (error, stdout, stderr) => {
       if (error) {
         console.error(`[WiFi Service] Command failed: ${error.message}`);
+        if (stderr) console.error(`[WiFi Service] Stderr: ${stderr}`);
+        resolve([]);
+        return;
+      }
+
+      if (!stdout || stdout.trim() === '') {
+        console.warn(`[WiFi Service] Command returned empty output.`);
         resolve([]);
         return;
       }
 
       const bssids = [];
-
       try {
         if (isWin) {
           parseWindows(stdout, bssids);
@@ -56,7 +62,8 @@ async function scan() {
       } catch (parseErr) {
         console.error(`[WiFi Service] Parsing error: ${parseErr.message}`);
       }
-
+      
+      console.log(`[WiFi Service] Scan finished. Found ${bssids.length} networks.`);
       resolve(bssids);
     });
   });
