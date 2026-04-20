@@ -20,41 +20,58 @@ class Delegate: NSObject, CLLocationManagerDelegate {
     let manager = CLLocationManager()
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         if let loc = locations.last {
-            print("\\(loc.coordinate.latitude),\\(loc.coordinate.longitude),\\(loc.horizontalAccuracy)")
+            print("OK:\\(loc.coordinate.latitude),\\(loc.coordinate.longitude),\\(loc.horizontalAccuracy)")
             exit(0)
         }
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("ERR:Location failed: \\(error.localizedDescription)")
         exit(1)
+    }
+    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+        if status == .denied || status == .restricted {
+            print("ERR:Permission denied by user")
+            exit(1)
+        }
     }
 }
 
 let delegate = Delegate()
 delegate.manager.delegate = delegate
 delegate.manager.desiredAccuracy = kCLLocationAccuracyBest
+
+let status = CLLocationManager.authorizationStatus()
+if status == .notDetermined {
+    // This only works in foreground
+    delegate.manager.requestWhenInUseAuthorization()
+} else if status == .denied || status == .restricted {
+    print("ERR:Authorization status is denied or restricted")
+    exit(1)
+}
+
 delegate.manager.startUpdatingLocation()
 
 let start = Date()
 while Date().timeIntervalSince(start) < 5 {
     RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
 }
+print("ERR:Timeout waiting for location")
 exit(1)
     `.trim();
 
     exec(`swift -e '${swiftCode}'`, (error, stdout, stderr) => {
-      if (error || !stdout.trim()) {
-        return reject(new Error('Native macOS location failed or denied'));
-      }
-      const parts = stdout.trim().split(',');
-      if (parts.length >= 2) {
-        resolve({
-          lat: parseFloat(parts[0]),
-          lon: parseFloat(parts[1]),
-          accuracy: parseFloat(parts[2]) || 10
+      const output = stdout.trim() || stderr.trim();
+      if (output.startsWith('OK:')) {
+        const data = output.substring(3).split(',');
+        return resolve({
+          lat: parseFloat(data[0]),
+          lon: parseFloat(data[1]),
+          accuracy: parseFloat(data[2]) || 10
         });
-      } else {
-        reject(new Error('Invalid output from native location script'));
       }
+      
+      const errMsg = output.startsWith('ERR:') ? output.substring(4) : (output || 'Unknown error');
+      reject(new Error(errMsg));
     });
   });
 }
