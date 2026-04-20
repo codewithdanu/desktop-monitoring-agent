@@ -1,17 +1,15 @@
 /**
  * Desktop Agent — Main Entry Point
- * Connects to server, registers device, sends metrics, handles commands.
+ * Orchestrates metrics collection, location tracking, and remote commands.
  */
 const { io } = require('socket.io-client');
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios');
-const wifi = require('node-wifi');
 
-// Initialize wifi module
-wifi.init({
-  iface: null // use default interface
-});
+// Services
+const locationService = require('./services/location.service');
+const { collectMetrics } = require('./metrics');
+const { handleCommand } = require('./commands');
 
 // Load config
 const configPath = path.join(__dirname, 'config.json');
@@ -21,9 +19,7 @@ if (!fs.existsSync(configPath)) {
 }
 const config = require('./config.json');
 
-const { collectMetrics } = require('./metrics');
-const { handleCommand } = require('./commands');
-
+// Initialize Socket.io
 const socket = io(config.serverUrl, {
   reconnection: true,
   reconnectionDelay: 5000,
@@ -44,20 +40,17 @@ socket.on('connect', () => {
 
 // ---- REGISTERED ----
 socket.on('agent:registered', () => {
-  console.log('[Agent] Registered successfully. Starting metrics loop...');
+  console.log('[Agent] Registered successfully. Starting monitoring loops...');
 
-  // Clear existing timer if reconnecting
-  if (metricsTimer) clearInterval(metricsTimer);
-
-  // Send first metrics immediately
+  // 1. Initial actions
   sendMetrics();
+  sendLocation();
 
-  // Then send on interval
+  // 2. Start intervals
+  if (metricsTimer) clearInterval(metricsTimer);
   metricsTimer = setInterval(sendMetrics, config.metricsIntervalMs || 30000);
 
-  // Start location loop (every 15 minutes by default)
   if (locationTimer) clearInterval(locationTimer);
-  sendLocation();
   locationTimer = setInterval(sendLocation, config.locationIntervalMs || 900000);
 });
 
@@ -66,194 +59,53 @@ async function sendMetrics() {
   try {
     const metrics = await collectMetrics(config.deviceId);
     socket.emit('agent:metrics', metrics);
-    console.log(`[Agent] Metrics sent — CPU: ${metrics.cpu_percent}%, RAM: ${metrics.memory_used_mb}MB`);
+    console.log(`[Agent] Metrics: CPU ${metrics.cpu_percent}%, RAM ${metrics.memory_used_mb}MB`);
   } catch (err) {
-    console.error('[Agent] Failed to collect metrics:', err.message);
+    console.error('[Agent] Metrics error:', err.message);
   }
 }
 
 // ---- LOCATION ----
 async function sendLocation() {
   try {
-    let locationData = null;
-    let method = 'IP';
-
-    // 1. Try WiFi Triangulation (if token exists)
-    if (config.googleMapsApiKey) {
-      try {
-        const isWin = process.platform === 'win32';
-        const isMac = process.platform === 'darwin';
-        const isLin = process.platform === 'linux';
-        
-        console.log(`[Agent] Scanning WiFi access points using ${isWin ? 'netsh' : isMac ? 'airport' : isLin ? 'nmcli' : 'default'}...`);
-        
-        const { exec } = require('child_process');
-        const networks = await new Promise((resolve) => {
-          let command = '';
-          if (isWin) {
-            command = 'netsh wlan show networks mode=bssid';
-          } else if (isMac) {
-            // macOS airport utility path
-            command = '/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s';
-          } else if (isLin) {
-            // Linux NetworkManager command
-            command = 'nmcli -t -f BSSID,SIGNAL,CHAN dev wifi list';
-          } else {
-            resolve([]); return;
-          }
-
-          exec(command, (error, stdout) => {
-            if (error) { resolve([]); return; }
-            
-            const bssids = [];
-
-            if (isWin) {
-              const lines = stdout.split('\r\n');
-              let currentSsid = '';
-              for (let i = 0; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (line.startsWith('SSID')) {
-                  currentSsid = line.split(':')[1]?.trim() || 'Unknown';
-                } else if (line.startsWith('BSSID')) {
-                  const mac = line.split(':')[1]?.trim() + ':' + line.split(':').slice(2).join(':').trim();
-                  const signalLine = lines[i+1]?.trim() || '';
-                  const channelLine = lines[i+2]?.trim() || '';
-                  if (signalLine.startsWith('Signal')) {
-                    const signalPercent = parseInt(signalLine.split(':')[1]) || 0;
-                    const channel = parseInt(channelLine.split(':')[1]) || 0;
-                    const dbm = Math.round((signalPercent / 2) - 100);
-                    bssids.push({ mac: mac.toLowerCase(), signal_level: dbm, channel: channel });
-                  }
-                }
-              }
-            } else if (isMac) {
-              // Parse macOS airport output
-              const lines = stdout.split('\n');
-              for (const line of lines) {
-                const parts = line.trim().split(/\s+/);
-                const macMatch = line.match(/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/);
-                if (macMatch) {
-                  const mac = macMatch[0];
-                  const macIndex = parts.indexOf(mac);
-                  if (macIndex !== -1 && parts[macIndex + 1]) {
-                    const rssi = parseInt(parts[macIndex + 1]);
-                    const channel = parseInt(parts[macIndex + 2]);
-                    bssids.push({ mac: mac.toLowerCase(), signal_level: rssi, channel: channel });
-                  }
-                }
-              }
-            } else if (isLin) {
-              // Parse nmcli terse output: "MAC:SIGNAL:CHAN"
-              const lines = stdout.split('\n');
-              for (const line of lines) {
-                if (!line.trim()) continue;
-                const parts = line.split(':');
-                if (parts.length >= 8) {
-                  const chan = parseInt(parts.pop());
-                  const rssi = parseInt(parts.pop());
-                  const mac = parts.join(':');
-                  bssids.push({ mac: mac.toLowerCase(), signal_level: rssi, channel: chan });
-                }
-              }
-            }
-            resolve(bssids);
-          });
-        });
-
-        console.log(`[Agent] WiFi scan complete. Found ${networks.length} access points.`);
-        
-        if (networks.length > 0) {
-          console.log(`[Agent] Sending ${networks.length} WiFi APs to Google maps...`);
-          
-          const payload = {
-            wifiAccessPoints: networks.map(nw => ({
-              macAddress:     nw.mac,
-              signalStrength: nw.signal_level,
-              channel:        nw.channel
-            }))
-          };
-
-          const response = await axios.post(`https://www.googleapis.com/geolocation/v1/geolocate?key=${config.googleMapsApiKey}`, payload);
-
-          if (response.data && response.data.location) {
-            locationData = {
-              lat: response.data.location.lat,
-              lon: response.data.location.lng,
-              accuracy: response.data.accuracy
-            };
-            method = 'Google';
-          }
-        } else {
-          console.warn('[Agent] No WiFi access points found.');
-        }
-      } catch (wifiErr) {
-        console.warn('[Agent] WiFi triangulation failed:', wifiErr.message);
-      }
-    }
-
-    // 2. Fallback to IP-based tracking if WiFi results are missing or highly inaccurate
-    // (Note: accuracy > 20000m usually means Google just guessed the city)
-    if (!locationData || locationData.accuracy > 20000) {
-      try {
-        const response = await axios.get('http://ip-api.com/json');
-        if (response.data && response.data.status === 'success') {
-          // Only replace if Google was really bad or not working at all
-          if (!locationData) {
-            locationData = {
-              lat: response.data.lat,
-              lon: response.data.lon,
-              accuracy: 5000
-            };
-            method = 'IP';
-          }
-        }
-      } catch (ipErr) {
-        console.warn('[Agent] IP fallback also failed:', ipErr.message);
-      }
-    }
-
-    if (locationData) {
+    const location = await locationService.getCurrentLocation(config);
+    
+    if (location) {
       socket.emit('agent:location', {
         deviceId:    config.deviceId,
-        latitude:    locationData.lat,
-        longitude:   locationData.lon,
-        accuracy_meters: locationData.accuracy,
+        latitude:    location.lat,
+        longitude:   location.lon,
+        accuracy_meters: location.accuracy,
         recorded_at: new Date().toISOString()
       });
       
-      const acc = locationData.accuracy ? `±${Math.round(locationData.accuracy)}m` : 'Unknown accuracy';
-      console.log(`[Agent] Location updated via ${method} (${acc}): ${locationData.lat}, ${locationData.lon}`);
+      const acc = location.accuracy ? `±${Math.round(location.accuracy)}m` : 'Unknown';
+      console.log(`[Agent] Location: ${location.method} (${acc}) -> ${location.lat}, ${location.lon}`);
     } else {
-      console.error('[Agent] All geolocation methods failed.');
+      console.error('[Agent] Location tracking failed (all methods).');
     }
   } catch (err) {
-    console.error('[Agent] Failed to fetch geolocation:', err.message);
+    console.error('[Agent] Location error:', err.message);
   }
 }
 
-// ---- COMMAND ----
+// ---- COMMANDS ----
 socket.on('command', async (data) => {
-  console.log(`[Agent] Command received: ${data.command_type}`);
+  console.log(`[Agent] Command: ${data.command_type}`);
   const result = await handleCommand(data, config, socket);
+  
   socket.emit('agent:command_result', {
     commandId: data.commandId,
     status:    result.error ? 'FAILED' : 'EXECUTED',
     result,
   });
-  console.log(`[Agent] Command result: ${JSON.stringify(result)}`);
 });
 
 // ---- DISCONNECT ----
 socket.on('disconnect', (reason) => {
-  console.log(`[Agent] Disconnected: ${reason}. Will reconnect...`);
-  if (metricsTimer) {
-    clearInterval(metricsTimer);
-    metricsTimer = null;
-  }
-  if (locationTimer) {
-    clearInterval(locationTimer);
-    locationTimer = null;
-  }
+  console.log(`[Agent] Disconnected (${reason}).`);
+  if (metricsTimer) clearInterval(metricsTimer);
+  if (locationTimer) clearInterval(locationTimer);
 });
 
 socket.on('connect_error', (err) => {
@@ -262,9 +114,7 @@ socket.on('connect_error', (err) => {
 
 // ---- GRACEFUL SHUTDOWN ----
 process.on('SIGINT', () => {
-  console.log('\n[Agent] Shutting down gracefully...');
-  if (metricsTimer) clearInterval(metricsTimer);
-  if (locationTimer) clearInterval(locationTimer);
+  console.log('\n[Agent] Shutting down...');
   socket.disconnect();
   process.exit(0);
 });
