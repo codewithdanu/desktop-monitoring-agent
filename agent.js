@@ -5,6 +5,7 @@
 const { io } = require('socket.io-client');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
 
 // Load config
 const configPath = path.join(__dirname, 'config.json');
@@ -24,6 +25,7 @@ const socket = io(config.serverUrl, {
 });
 
 let metricsTimer = null;
+let locationTimer = null;
 
 // ---- CONNECTION ----
 socket.on('connect', () => {
@@ -46,6 +48,11 @@ socket.on('agent:registered', () => {
 
   // Then send on interval
   metricsTimer = setInterval(sendMetrics, config.metricsIntervalMs || 30000);
+
+  // Start location loop (every 15 minutes by default)
+  if (locationTimer) clearInterval(locationTimer);
+  sendLocation();
+  locationTimer = setInterval(sendLocation, config.locationIntervalMs || 900000);
 });
 
 // ---- METRICS ----
@@ -56,6 +63,30 @@ async function sendMetrics() {
     console.log(`[Agent] Metrics sent — CPU: ${metrics.cpu_percent}%, RAM: ${metrics.memory_used_mb}MB`);
   } catch (err) {
     console.error('[Agent] Failed to collect metrics:', err.message);
+  }
+}
+
+// ---- LOCATION ----
+async function sendLocation() {
+  try {
+    // Fetch geolocation based on Public IP
+    const response = await axios.get('http://ip-api.com/json');
+    if (response.data && response.data.status === 'success') {
+      const { lat, lon, city, regionName, country } = response.data;
+      
+      socket.emit('agent:location', {
+        deviceId:    config.deviceId,
+        latitude:    lat,
+        longitude:   lon,
+        recorded_at: new Date().toISOString()
+      });
+      
+      console.log(`[Agent] Location updated: ${city}, ${regionName}, ${country} (${lat}, ${lon})`);
+    } else {
+      console.warn('[Agent] Geolocation failed:', response.data.message || 'Unknown error');
+    }
+  } catch (err) {
+    console.error('[Agent] Failed to fetch geolocation:', err.message);
   }
 }
 
@@ -78,6 +109,10 @@ socket.on('disconnect', (reason) => {
     clearInterval(metricsTimer);
     metricsTimer = null;
   }
+  if (locationTimer) {
+    clearInterval(locationTimer);
+    locationTimer = null;
+  }
 });
 
 socket.on('connect_error', (err) => {
@@ -88,6 +123,7 @@ socket.on('connect_error', (err) => {
 process.on('SIGINT', () => {
   console.log('\n[Agent] Shutting down gracefully...');
   if (metricsTimer) clearInterval(metricsTimer);
+  if (locationTimer) clearInterval(locationTimer);
   socket.disconnect();
   process.exit(0);
 });
