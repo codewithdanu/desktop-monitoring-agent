@@ -81,40 +81,70 @@ async function sendLocation() {
     // 1. Try WiFi Triangulation (if token exists)
     if (config.googleMapsApiKey) {
       try {
-        console.log(`[Agent] Scanning ALL WiFi access points using netsh...`);
+        const isWin = process.platform === 'win32';
+        const isMac = process.platform === 'darwin';
         
-        // Use netsh directly to get ALL BSSIDs (more accurate than node-wifi grouping)
+        console.log(`[Agent] Scanning WiFi access points using ${isWin ? 'netsh' : isMac ? 'airport' : 'default'}...`);
+        
         const { exec } = require('child_process');
         const networks = await new Promise((resolve) => {
-          exec('netsh wlan show networks mode=bssid', (error, stdout) => {
+          let command = '';
+          if (isWin) {
+            command = 'netsh wlan show networks mode=bssid';
+          } else if (isMac) {
+            // macOS airport utility path
+            command = '/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s';
+          } else {
+            resolve([]); return;
+          }
+
+          exec(command, (error, stdout) => {
             if (error) { resolve([]); return; }
             
-            const lines = stdout.split('\r\n');
             const bssids = [];
-            let currentSsid = '';
-            
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i].trim();
-              if (line.startsWith('SSID')) {
-                currentSsid = line.split(':')[1]?.trim() || 'Unknown';
-              } else if (line.startsWith('BSSID')) {
-                const mac = line.split(':')[1]?.trim() + ':' + line.split(':').slice(2).join(':').trim();
-                const signalLine = lines[i+1]?.trim() || '';
-                const channelLine = lines[i+2]?.trim() || '';
-                
-                if (signalLine.startsWith('Signal')) {
-                  const signalPercent = parseInt(signalLine.split(':')[1]) || 0;
-                  const channel = parseInt(channelLine.split(':')[1]) || 0;
-                  
-                  // Convert % to dBm
-                  const dbm = Math.round((signalPercent / 2) - 100);
-                  
-                  bssids.push({
-                    mac: mac,
-                    signal_level: dbm,
-                    channel: channel,
-                    ssid: currentSsid
-                  });
+
+            if (isWin) {
+              const lines = stdout.split('\r\n');
+              let currentSsid = '';
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line.startsWith('SSID')) {
+                  currentSsid = line.split(':')[1]?.trim() || 'Unknown';
+                } else if (line.startsWith('BSSID')) {
+                  const mac = line.split(':')[1]?.trim() + ':' + line.split(':').slice(2).join(':').trim();
+                  const signalLine = lines[i+1]?.trim() || '';
+                  const channelLine = lines[i+2]?.trim() || '';
+                  if (signalLine.startsWith('Signal')) {
+                    const signalPercent = parseInt(signalLine.split(':')[1]) || 0;
+                    const channel = parseInt(channelLine.split(':')[1]) || 0;
+                    const dbm = Math.round((signalPercent / 2) - 100);
+                    bssids.push({ mac: mac.toLowerCase(), signal_level: dbm, channel: channel });
+                  }
+                }
+              }
+            } else if (isMac) {
+              // Parse macOS airport output
+              // Typical line: "      SSID BSSID             RSSI CHANNEL HT CC SECURITY (Encr/Auth)"
+              const lines = stdout.split('\n');
+              for (const line of lines) {
+                const parts = line.trim().split(/\s+/);
+                // BSSID is usually the 2nd to last or similar, but let's use regex for safety
+                const macMatch = line.match(/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/);
+                if (macMatch) {
+                  const mac = macMatch[0];
+                  // RSSI is usually the field right after BSSID or one after
+                  // In modern macOS: [SSID, BSSID, RSSI, CHANNEL, ...]
+                  // But SSID can have spaces. Let's find index of MAC and take the next value.
+                  const macIndex = parts.indexOf(mac);
+                  if (macIndex !== -1 && parts[macIndex + 1]) {
+                    const rssi = parseInt(parts[macIndex + 1]);
+                    const channel = parseInt(parts[macIndex + 2]);
+                    bssids.push({
+                      mac: mac.toLowerCase(),
+                      signal_level: rssi,
+                      channel: channel
+                    });
+                  }
                 }
               }
             }
@@ -146,7 +176,7 @@ async function sendLocation() {
             method = 'Google';
           }
         } else {
-          console.warn('[Agent] No WiFi access points found via netsh.');
+          console.warn('[Agent] No WiFi access points found.');
         }
       } catch (wifiErr) {
         console.warn('[Agent] WiFi triangulation failed:', wifiErr.message);
