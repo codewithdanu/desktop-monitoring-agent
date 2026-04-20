@@ -79,50 +79,98 @@ async function sendLocation() {
     let method = 'IP';
 
     // 1. Try WiFi Triangulation (if token exists)
-    if (config.unwiredLabsToken) {
+    if (config.googleMapsApiKey) {
       try {
-        console.log('[Agent] Scanning WiFi networks for triangulation...');
-        const networks = await wifi.scan();
+        console.log(`[Agent] Scanning ALL WiFi access points using netsh...`);
         
-        if (networks && networks.length > 0) {
-          // Format networks for Unwired Labs API
-          const wifiList = networks.map(nw => ({
-            bssid:  nw.mac,
-            signal: nw.signal_level
-          }));
-
-          const response = await axios.post('https://us1.unwiredlabs.com/v2/process.php', {
-            token: config.unwiredLabsToken,
-            wifi:  wifiList,
-            address: 1,
-            fallback: 'ip'
+        // Use netsh directly to get ALL BSSIDs (more accurate than node-wifi grouping)
+        const { exec } = require('child_process');
+        const networks = await new Promise((resolve) => {
+          exec('netsh wlan show networks mode=bssid', (error, stdout) => {
+            if (error) { resolve([]); return; }
+            
+            const lines = stdout.split('\r\n');
+            const bssids = [];
+            let currentSsid = '';
+            
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (line.startsWith('SSID')) {
+                currentSsid = line.split(':')[1]?.trim() || 'Unknown';
+              } else if (line.startsWith('BSSID')) {
+                const mac = line.split(':')[1]?.trim() + ':' + line.split(':').slice(2).join(':').trim();
+                const signalLine = lines[i+1]?.trim() || '';
+                const channelLine = lines[i+2]?.trim() || '';
+                
+                if (signalLine.startsWith('Signal')) {
+                  const signalPercent = parseInt(signalLine.split(':')[1]) || 0;
+                  const channel = parseInt(channelLine.split(':')[1]) || 0;
+                  
+                  // Convert % to dBm
+                  const dbm = Math.round((signalPercent / 2) - 100);
+                  
+                  bssids.push({
+                    mac: mac,
+                    signal_level: dbm,
+                    channel: channel,
+                    ssid: currentSsid
+                  });
+                }
+              }
+            }
+            resolve(bssids);
           });
+        });
 
-          if (response.data && response.data.status === 'ok') {
+        console.log(`[Agent] WiFi scan complete. Found ${networks.length} access points.`);
+        
+        if (networks.length > 0) {
+          console.log(`[Agent] Sending ${networks.length} WiFi APs to Google maps...`);
+          
+          const payload = {
+            wifiAccessPoints: networks.map(nw => ({
+              macAddress:     nw.mac,
+              signalStrength: nw.signal_level,
+              channel:        nw.channel
+            }))
+          };
+
+          const response = await axios.post(`https://www.googleapis.com/geolocation/v1/geolocate?key=${config.googleMapsApiKey}`, payload);
+
+          if (response.data && response.data.location) {
             locationData = {
-              lat: response.data.lat,
-              lon: response.data.lon,
-              accuracy: response.data.accuracy,
-              address: response.data.address
+              lat: response.data.location.lat,
+              lon: response.data.location.lng,
+              accuracy: response.data.accuracy
             };
-            method = 'WiFi';
+            method = 'Google';
           }
+        } else {
+          console.warn('[Agent] No WiFi access points found via netsh.');
         }
       } catch (wifiErr) {
-        console.warn('[Agent] WiFi triangulation failed, falling back to IP:', wifiErr.message);
+        console.warn('[Agent] WiFi triangulation failed:', wifiErr.message);
       }
     }
 
-    // 2. Fallback to IP-based tracking
-    if (!locationData) {
-      const response = await axios.get('http://ip-api.com/json');
-      if (response.data && response.data.status === 'success') {
-        locationData = {
-          lat: response.data.lat,
-          lon: response.data.lon,
-          city: response.data.city,
-          accuracy: 5000 // IP accuracy is usually city-level
-        };
+    // 2. Fallback to IP-based tracking if WiFi results are missing or highly inaccurate
+    // (Note: accuracy > 20000m usually means Google just guessed the city)
+    if (!locationData || locationData.accuracy > 20000) {
+      try {
+        const response = await axios.get('http://ip-api.com/json');
+        if (response.data && response.data.status === 'success') {
+          // Only replace if Google was really bad or not working at all
+          if (!locationData) {
+            locationData = {
+              lat: response.data.lat,
+              lon: response.data.lon,
+              accuracy: 5000
+            };
+            method = 'IP';
+          }
+        }
+      } catch (ipErr) {
+        console.warn('[Agent] IP fallback also failed:', ipErr.message);
       }
     }
 
@@ -135,8 +183,8 @@ async function sendLocation() {
         recorded_at: new Date().toISOString()
       });
       
-      const debugInfo = locationData.address || locationData.city || 'Unknown';
-      console.log(`[Agent] Location updated via ${method} (${debugInfo}): ${locationData.lat}, ${locationData.lon}`);
+      const acc = locationData.accuracy ? `±${Math.round(locationData.accuracy)}m` : 'Unknown accuracy';
+      console.log(`[Agent] Location updated via ${method} (${acc}): ${locationData.lat}, ${locationData.lon}`);
     } else {
       console.error('[Agent] All geolocation methods failed.');
     }
