@@ -18,16 +18,8 @@ async function scan() {
     if (isWin) {
       command = 'netsh wlan show networks mode=bssid';
     } else if (isMac) {
-      // Try multiple airport paths + system_profiler as final fallback
-      command = `
-        if [ -f "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport" ]; then
-          /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s
-        elif [ -f "/System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport" ]; then
-          /System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport -s
-        else
-          system_profiler SPAirPortDataType
-        fi
-      `.trim();
+      // Use native Swift for CoreWLAN scan (most reliable on macOS Sonoma/Sequoia)
+      command = `swift -e 'import CoreWLAN; if let interface = CWWiFiClient.shared().interface() { if let networks = try? interface.scanForNetworks(withSSID: nil) { for n in networks { print("\(n.bssid ?? "??") | \(n.rssiValue) | \(n.wlanChannel.channelNumber)") } } }'`;
     } else if (isLin) {
       command = 'nmcli -t -f BSSID,SIGNAL,CHAN dev wifi list';
     } else {
@@ -88,53 +80,29 @@ function parseWindows(stdout, bssids) {
 }
 
 function parseMac(stdout, bssids) {
-  // Support both 'airport -s' (tabular) and 'system_profiler' (indented)
+  // Format: "BSSID | RSSI | CHANNEL"
   const lines = stdout.split('\n');
+  let permissionWarningShown = false;
 
-  // Check if it's airport output (tabular format with BSSID usually in the second column)
-  const isAirport = stdout.includes('SSID BSSID');
-
-  if (isAirport) {
-    for (const line of lines) {
-      const parts = line.trim().split(/\s+/);
-      const macMatch = line.match(/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/);
-      if (macMatch) {
-        const mac = macMatch[0];
-        // In airport -s output: [SSID, BSSID, RSSI, CHANNEL, ...]
-        const macIndex = parts.indexOf(mac);
-        if (macIndex !== -1 && parts[macIndex + 1]) {
-          const rssi = parseInt(parts[macIndex + 1]);
-          const channel = parseInt(parts[macIndex + 2]);
-          bssids.push({ mac: mac.toLowerCase(), signal_level: rssi, channel: channel });
-        }
+  for (const line of lines) {
+    if (!line.includes('|')) continue;
+    
+    const [mac, rssi, channel] = line.split('|').map(s => s.trim());
+    
+    if (mac === '??') {
+      if (!permissionWarningShown) {
+        console.warn('[WiFi Service] macOS is censoring BSSIDs (??). PLEASE ENABLE "Location Services" FOR TERMINAL in System Settings!');
+        permissionWarningShown = true;
       }
+      continue;
     }
-  } else {
-    // system_profiler format
-    let currentBssid = null;
-    let currentRssi = null;
-    let currentChannel = null;
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('BSSID:')) {
-        currentBssid = trimmed.split('BSSID:')[1].trim().toLowerCase();
-      } else if (trimmed.startsWith('Signal / Noise:')) {
-        currentRssi = parseInt(trimmed.split('Signal / Noise:')[1].split('/')[0].trim());
-      } else if (trimmed.startsWith('Channel:')) {
-        currentChannel = parseInt(trimmed.split('Channel:')[1].trim());
-      }
-
-      if (currentBssid && currentRssi !== null) {
-        bssids.push({
-          mac: currentBssid,
-          signal_level: currentRssi,
-          channel: currentChannel || 0
-        });
-        currentBssid = null;
-        currentRssi = null;
-        currentChannel = null;
-      }
+    if (mac && rssi) {
+      bssids.push({
+        mac: mac.toLowerCase(),
+        signal_level: parseInt(rssi),
+        channel: parseInt(channel) || 0
+      });
     }
   }
 }
