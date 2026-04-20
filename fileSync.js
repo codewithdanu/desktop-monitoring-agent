@@ -5,6 +5,7 @@ const axios    = require('axios');
 const FormData = require('form-data');
 const fs       = require('fs');
 const path     = require('path');
+const mime     = require('mime-types');
 
 /**
  * Upload a file from local path to the server.
@@ -16,7 +17,12 @@ async function uploadFile(filePath, config) {
   if (!fs.existsSync(filePath)) return { error: `File not found: ${filePath}` };
 
   const form = new FormData();
-  form.append('file', fs.createReadStream(filePath), path.basename(filePath));
+  const contentType = mime.lookup(filePath) || 'application/octet-stream';
+  
+  form.append('file', fs.createReadStream(filePath), {
+    filename:    path.basename(filePath),
+    contentType: contentType,
+  });
   form.append('deviceId', config.deviceId);
 
   try {

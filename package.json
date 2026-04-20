@@ -11,6 +11,7 @@
     "axios": "^1.6.2",
     "dotenv": "^16.3.1",
     "form-data": "^4.0.0",
+    "mime-types": "^3.0.2",
     "node-wifi": "^2.0.16",
     "socket.io-client": "^4.7.2",
     "systeminformation": "^5.21.22",
