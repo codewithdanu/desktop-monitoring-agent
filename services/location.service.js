@@ -1,77 +1,48 @@
 /**
  * Location Service
  * Handles geolocation via Google Maps and IP fallback.
+ * Note: CoreLocation and WiFi scanning are skipped on macOS Tahoe (26+)
+ * due to tightened privacy restrictions. IP-based location is used instead.
  */
-const { exec } = require('child_process');
 const axios = require('axios');
 const wifiService = require('./wifi.service');
 
 /**
+ * Returns the macOS major version number, or 0 on other platforms.
+ */
+function getMacOSMajorVersion() {
+  if (process.platform !== 'darwin') return 0;
+  try {
+    const { execSync } = require('child_process');
+    const version = execSync('sw_vers -productVersion', { encoding: 'utf8' }).trim();
+    return parseInt(version.split('.')[0], 10);
+  } catch {
+    return 0;
+  }
+}
+
+const MACOS_MAJOR = getMacOSMajorVersion();
+// macOS 26 (Tahoe) blocks CoreLocation and WiFi BSSID scanning for terminal apps
+const SKIP_NATIVE = MACOS_MAJOR >= 26;
+
+/**
  * Gets high-precision location on macOS using native CoreLocation via Swift.
- * This is building-level accuracy (±10m).
+ * Only attempted on macOS < 26.
  */
 async function getNativeMacLocation() {
   return new Promise((resolve, reject) => {
-    const swiftCode = `
-import CoreLocation
-import Foundation
-
-class Delegate: NSObject, CLLocationManagerDelegate {
-    let manager = CLLocationManager()
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        if let loc = locations.last {
-            print("OK:\\(loc.coordinate.latitude),\\(loc.coordinate.longitude),\\(loc.horizontalAccuracy)")
-            exit(0)
-        }
-    }
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("ERR:Location failed: \\(error.localizedDescription)")
-        exit(1)
-    }
-    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        if status == .denied || status == .restricted {
-            print("ERR:Permission denied by user")
-            exit(1)
-        }
-    }
-}
-
-let delegate = Delegate()
-delegate.manager.delegate = delegate
-delegate.manager.desiredAccuracy = kCLLocationAccuracyBest
-
-let status = CLLocationManager.authorizationStatus()
-if status == .notDetermined {
-    // This only works in foreground
-    delegate.manager.requestWhenInUseAuthorization()
-} else if status == .denied || status == .restricted {
-    print("ERR:Authorization status is denied or restricted")
-    exit(1)
-}
-
-delegate.manager.startUpdatingLocation()
-
-let start = Date()
-while Date().timeIntervalSince(start) < 5 {
-    RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
-}
-print("ERR:Timeout waiting for location")
-exit(1)
-    `.trim();
-
-    exec(`swift -e '${swiftCode}'`, (error, stdout, stderr) => {
-      const output = stdout.trim() || stderr.trim();
-      if (output.startsWith('OK:')) {
-        const data = output.substring(3).split(',');
-        return resolve({
-          lat: parseFloat(data[0]),
-          lon: parseFloat(data[1]),
-          accuracy: parseFloat(data[2]) || 10
-        });
+    const { exec } = require('child_process');
+    const path = require('path');
+    const helperPath = path.join(__dirname, '../LocationHelper.app/Contents/MacOS/LocationHelper');
+    
+    exec(helperPath, { timeout: 12000 }, (error, stdout) => {
+      try {
+        const data = JSON.parse(stdout.trim());
+        if (data.error) return reject(new Error(data.error));
+        resolve({ lat: data.lat, lon: data.lon, accuracy: data.accuracy });
+      } catch {
+        reject(new Error('Parse failed'));
       }
-      
-      const errMsg = output.startsWith('ERR:') ? output.substring(4) : (output || 'Unknown error');
-      reject(new Error(errMsg));
     });
   });
 }
@@ -85,33 +56,30 @@ async function getCurrentLocation(config) {
   let locationData = null;
   let method = 'Unknown';
 
-  // 0. Try native macOS location first (HIGHEST PRECISION)
+  // 0. Try native macOS CoreLocation (only on macOS < 26)
   if (process.platform === 'darwin') {
     try {
-      console.log(`[Location Service] Trying native macOS CoreLocation...`);
       const nativeLoc = await getNativeMacLocation();
       if (nativeLoc) {
-        console.log(`[Location Service] Native Mac location successful (accuracy: ${nativeLoc.accuracy}m)`);
+        console.log(`[Location Service] Native location success (±${Math.round(nativeLoc.accuracy)}m)`);
         return { ...nativeLoc, method: 'macOS-Native' };
       }
     } catch (err) {
-      console.warn(`[Location Service] Native Mac location failed: ${err.message}`);
-      console.log(`[Location Service] Falling back to WiFi/IP methods...`);
+      console.warn(`[Location Service] Native failed, falling back to IP...`);
     }
   }
 
-  // 1. Try WiFi Triangulation or Google-IP Triangulation
+  // 1. Try Google Geolocation API (skip WiFi scan on macOS 26+ to avoid noise)
   if (config.googleMapsApiKey) {
     try {
-      const networks = await wifiService.scan();
-      
-      // Even if networks.length is 0, we still ask Google using 'considerIp: true'
-      // Google's IP database is much more accurate than free ones
-      console.log(`[Location Service] Querying Google Maps (WiFi count: ${networks ? networks.length : 0})...`);
-      
+      let networks = [];
+      if (!SKIP_NATIVE) {
+        networks = await wifiService.scan() || [];
+      }
+
       const payload = {
         considerIp: true,
-        wifiAccessPoints: (networks || []).map(nw => ({
+        wifiAccessPoints: networks.map(nw => ({
           macAddress:     nw.mac,
           signalStrength: nw.signal_level,
           channel:        nw.channel
@@ -119,7 +87,7 @@ async function getCurrentLocation(config) {
       };
 
       const response = await axios.post(
-        `https://www.googleapis.com/geolocation/v1/geolocate?key=${config.googleMapsApiKey}`, 
+        `https://www.googleapis.com/geolocation/v1/geolocate?key=${config.googleMapsApiKey}`,
         payload
       );
 
@@ -129,49 +97,39 @@ async function getCurrentLocation(config) {
           lon: response.data.location.lng,
           accuracy: response.data.accuracy
         };
-        method = networks && networks.length > 0 ? 'Google' : 'Google-IP';
+        method = networks.length > 0 ? 'Google' : 'Google-IP';
       }
-    } catch (wifiErr) {
-      console.warn(`[Location Service] Google triangulation failed: ${wifiErr.message}`);
+    } catch (err) {
+      // silent — fall through to IP
     }
   }
 
-  // 2. Secondary Fallback to generic IP-based tracking if Google failed or accuracy is too low (>20km)
+  // 2. IP fallback if Google failed or accuracy too low (>20km)
   if (!locationData || locationData.accuracy > 20000) {
-    if (locationData && locationData.accuracy > 20000) {
-      console.log(`[Location Service] Google accuracy too low (${Math.round(locationData.accuracy)}m), trying generic IP API...`);
-    } else if (!locationData) {
-      console.log(`[Location Service] Google failed, trying generic IP API...`);
-    }
-
     try {
-      // Try ipinfo.io first as it's often more accurate for residential IPs
-      console.log(`[Location Service] Trying ipinfo.io...`);
       const response = await axios.get('https://ipinfo.io/json');
       if (response.data && response.data.loc) {
         const [lat, lon] = response.data.loc.split(',').map(Number);
         locationData = { lat, lon, accuracy: 3000 };
         method = 'IP-ipinfo';
       }
-    } catch (ipinfoErr) {
-      console.warn(`[Location Service] ipinfo.io failed: ${ipinfoErr.message}`);
+    } catch {
+      // try last resort
     }
 
     if (!locationData) {
       try {
-        // Fallback to ip-api.com
-        console.log(`[Location Service] Trying ip-api.com...`);
         const response = await axios.get('http://ip-api.com/json');
         if (response.data && response.data.status === 'success') {
           locationData = {
             lat: response.data.lat,
             lon: response.data.lon,
-            accuracy: 5000 
+            accuracy: 5000
           };
           method = 'IP-ip-api';
         }
-      } catch (ipErr) {
-        console.warn(`[Location Service] Final IP fallback failed: ${ipErr.message}`);
+      } catch {
+        // all methods exhausted
       }
     }
   }
@@ -179,7 +137,7 @@ async function getCurrentLocation(config) {
   if (locationData) {
     return { ...locationData, method };
   }
-  
+
   return null;
 }
 
