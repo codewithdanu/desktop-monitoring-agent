@@ -37,6 +37,10 @@ logs:
 status:
 	pm2 status
 
-# 8. Clean: Hapus dependensi jika diperlukan
+# 8. Delete: Hapus proses dari PM2 secara total
+delete:
+	pm2 delete device-monitor
+
+# 9. Clean: Hapus dependensi jika diperlukan
 clean:
 	rm -rf node_modules package-lock.json
