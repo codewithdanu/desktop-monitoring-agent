@@ -51,7 +51,7 @@ socket.on('agent:registered', () => {
   metricsTimer = setInterval(sendMetrics, config.metricsIntervalMs || 30000);
 
   if (locationTimer) clearInterval(locationTimer);
-  locationTimer = setInterval(sendLocation, config.locationIntervalMs || 900000);
+  locationTimer = setInterval(sendLocation, config.locationIntervalMs || 30000); // Fast update for debugging
 });
 
 // ---- METRICS ----
