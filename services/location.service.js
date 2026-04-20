@@ -59,18 +59,34 @@ async function getCurrentLocation(config) {
     }
 
     try {
-      // Use ip-api.com as final fallback
-      const response = await axios.get('http://ip-api.com/json');
-      if (response.data && response.data.status === 'success') {
-        locationData = {
-          lat: response.data.lat,
-          lon: response.data.lon,
-          accuracy: 5000 // Standard IP accuracy
-        };
-        method = 'IP-Fallback';
+      // Try ipinfo.io first as it's often more accurate for residential IPs
+      console.log(`[Location Service] Trying ipinfo.io...`);
+      const response = await axios.get('https://ipinfo.io/json');
+      if (response.data && response.data.loc) {
+        const [lat, lon] = response.data.loc.split(',').map(Number);
+        locationData = { lat, lon, accuracy: 3000 };
+        method = 'IP-ipinfo';
       }
-    } catch (ipErr) {
-      console.warn(`[Location Service] Final IP fallback failed: ${ipErr.message}`);
+    } catch (ipinfoErr) {
+      console.warn(`[Location Service] ipinfo.io failed: ${ipinfoErr.message}`);
+    }
+
+    if (!locationData) {
+      try {
+        // Fallback to ip-api.com
+        console.log(`[Location Service] Trying ip-api.com...`);
+        const response = await axios.get('http://ip-api.com/json');
+        if (response.data && response.data.status === 'success') {
+          locationData = {
+            lat: response.data.lat,
+            lon: response.data.lon,
+            accuracy: 5000 
+          };
+          method = 'IP-ip-api';
+        }
+      } catch (ipErr) {
+        console.warn(`[Location Service] Final IP fallback failed: ${ipErr.message}`);
+      }
     }
   }
 
