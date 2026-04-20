@@ -18,8 +18,8 @@ async function scan() {
     if (isWin) {
       command = 'netsh wlan show networks mode=bssid';
     } else if (isMac) {
-      // Use native Swift with improved escaping and type safety
-      const swiftCode = 'import CoreWLAN; if let i = CWWiFiClient.shared().interface(), let ns = try? i.scanForNetworks(withSSID: nil) { for n in ns { let b = n.bssid ?? "??"; print(b, n.rssiValue, n.wlanChannel.channelNumber, separator: " | ") } }';
+      // Use native Swift with improved escaping and type safety (handling optional wlanChannel)
+      const swiftCode = 'import CoreWLAN; if let i = CWWiFiClient.shared().interface(), let ns = try? i.scanForNetworks(withSSID: nil) { for n in ns { let b = n.bssid ?? "??"; let c = n.wlanChannel?.channelNumber ?? 0; print(b, n.rssiValue, c, separator: " | ") } }';
       command = `swift -e '${swiftCode}'`;
     } else if (isLin) {
       command = 'nmcli -t -f BSSID,SIGNAL,CHAN dev wifi list';
@@ -33,7 +33,7 @@ async function scan() {
       if (error) {
         // Fallback for strict Swift versions where bssid is non-optional String
         if (error.message.includes('non-optional')) {
-          const fallbackSwift = 'import CoreWLAN; if let i = CWWiFiClient.shared().interface(), let ns = try? i.scanForNetworks(withSSID: nil) { for n in ns { print(n.bssid, n.rssiValue, n.wlanChannel.channelNumber, separator: " | ") } }';
+          const fallbackSwift = 'import CoreWLAN; if let i = CWWiFiClient.shared().interface(), let ns = try? i.scanForNetworks(withSSID: nil) { for n in ns { let c = n.wlanChannel?.channelNumber ?? 0; print(n.bssid, n.rssiValue, c, separator: " | ") } }';
           exec(`swift -e '${fallbackSwift}'`, (err2, out2) => {
             if (err2) {
               console.error(`[WiFi Service] Swift fallback failed: ${err2.message}`);
