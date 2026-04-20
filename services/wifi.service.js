@@ -18,7 +18,8 @@ async function scan() {
     if (isWin) {
       command = 'netsh wlan show networks mode=bssid';
     } else if (isMac) {
-      command = '/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s';
+      // Use system_profiler as it's more reliable on modern macOS (Sonoma/Sequoia)
+      command = 'system_profiler SPAirPortDataType';
     } else if (isLin) {
       command = 'nmcli -t -f BSSID,SIGNAL,CHAN dev wifi list';
     } else {
@@ -72,18 +73,37 @@ function parseWindows(stdout, bssids) {
 }
 
 function parseMac(stdout, bssids) {
+  // system_profiler SPAirPortDataType output is structured with indentation
   const lines = stdout.split('\n');
+  let currentBssid = null;
+  let currentRssi = null;
+  let currentChannel = null;
+
   for (const line of lines) {
-    const parts = line.trim().split(/\s+/);
-    const macMatch = line.match(/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/);
-    if (macMatch) {
-      const mac = macMatch[0];
-      const macIndex = parts.indexOf(mac);
-      if (macIndex !== -1 && parts[macIndex + 1]) {
-        const rssi = parseInt(parts[macIndex + 1]);
-        const channel = parseInt(parts[macIndex + 2]);
-        bssids.push({ mac: mac.toLowerCase(), signal_level: rssi, channel: channel });
-      }
+    const trimmed = line.trim();
+    
+    if (trimmed.startsWith('BSSID:')) {
+      currentBssid = trimmed.split('BSSID:')[1].trim().toLowerCase();
+    } else if (trimmed.startsWith('Signal / Noise:')) {
+      // Format: "Signal / Noise: -53 dBm / -92 dBm"
+      const signalPart = trimmed.split('Signal / Noise:')[1].split('/')[0].trim();
+      currentRssi = parseInt(signalPart);
+    } else if (trimmed.startsWith('Channel:')) {
+      currentChannel = parseInt(trimmed.split('Channel:')[1].trim());
+    }
+
+    // When we have a BSSID and RSSI, push it. 
+    // In system_profiler, these usually appear together under each network name
+    if (currentBssid && currentRssi !== null) {
+      bssids.push({
+        mac: currentBssid,
+        signal_level: currentRssi,
+        channel: currentChannel || 0
+      });
+      // Reset for next block
+      currentBssid = null;
+      currentRssi = null;
+      currentChannel = null;
     }
   }
 }
