@@ -83,8 +83,9 @@ async function sendLocation() {
       try {
         const isWin = process.platform === 'win32';
         const isMac = process.platform === 'darwin';
+        const isLin = process.platform === 'linux';
         
-        console.log(`[Agent] Scanning WiFi access points using ${isWin ? 'netsh' : isMac ? 'airport' : 'default'}...`);
+        console.log(`[Agent] Scanning WiFi access points using ${isWin ? 'netsh' : isMac ? 'airport' : isLin ? 'nmcli' : 'default'}...`);
         
         const { exec } = require('child_process');
         const networks = await new Promise((resolve) => {
@@ -94,6 +95,9 @@ async function sendLocation() {
           } else if (isMac) {
             // macOS airport utility path
             command = '/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s';
+          } else if (isLin) {
+            // Linux NetworkManager command
+            command = 'nmcli -t -f BSSID,SIGNAL,CHAN dev wifi list';
           } else {
             resolve([]); return;
           }
@@ -124,27 +128,31 @@ async function sendLocation() {
               }
             } else if (isMac) {
               // Parse macOS airport output
-              // Typical line: "      SSID BSSID             RSSI CHANNEL HT CC SECURITY (Encr/Auth)"
               const lines = stdout.split('\n');
               for (const line of lines) {
                 const parts = line.trim().split(/\s+/);
-                // BSSID is usually the 2nd to last or similar, but let's use regex for safety
                 const macMatch = line.match(/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/);
                 if (macMatch) {
                   const mac = macMatch[0];
-                  // RSSI is usually the field right after BSSID or one after
-                  // In modern macOS: [SSID, BSSID, RSSI, CHANNEL, ...]
-                  // But SSID can have spaces. Let's find index of MAC and take the next value.
                   const macIndex = parts.indexOf(mac);
                   if (macIndex !== -1 && parts[macIndex + 1]) {
                     const rssi = parseInt(parts[macIndex + 1]);
                     const channel = parseInt(parts[macIndex + 2]);
-                    bssids.push({
-                      mac: mac.toLowerCase(),
-                      signal_level: rssi,
-                      channel: channel
-                    });
+                    bssids.push({ mac: mac.toLowerCase(), signal_level: rssi, channel: channel });
                   }
+                }
+              }
+            } else if (isLin) {
+              // Parse nmcli terse output: "MAC:SIGNAL:CHAN"
+              const lines = stdout.split('\n');
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                const parts = line.split(':');
+                if (parts.length >= 8) {
+                  const chan = parseInt(parts.pop());
+                  const rssi = parseInt(parts.pop());
+                  const mac = parts.join(':');
+                  bssids.push({ mac: mac.toLowerCase(), signal_level: rssi, channel: chan });
                 }
               }
             }
