@@ -45,6 +45,10 @@ async function handleCommand({ command_type, command_params = {} }, config) {
         return getSystemInfo();
       case 'RUN_COMMAND':
         return runShellCommand(command_params.cmd);
+      
+      case 'PING':
+      case 'HEARTBEAT':
+        return { message: 'Pong! Desktop agent is online.', timestamp: new Date().toISOString() };
 
       default:
         return { error: `Unknown command: ${command_type}` };

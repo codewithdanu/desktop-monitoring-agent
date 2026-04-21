@@ -92,6 +92,13 @@ async function sendLocation() {
 // ---- COMMANDS ----
 socket.on('command', async (data) => {
   console.log(`[Agent] Command: ${data.command_type}`);
+  
+  // Trigger immediate refresh for PING
+  if (data.command_type === 'PING' || data.command_type === 'HEARTBEAT') {
+    sendMetrics();
+    sendLocation();
+  }
+
   const result = await handleCommand(data, config, socket);
   
   socket.emit('agent:command_result', {
