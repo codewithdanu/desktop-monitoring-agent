@@ -29,7 +29,7 @@ async function scan() {
       return;
     }
 
-    exec(command, (error, stdout, stderr) => {
+    exec(command, { windowsHide: true }, (error, stdout, stderr) => {
       if (error) {
         // Fallback for strict Swift versions where bssid is non-optional String
         if (error.message.includes('non-optional')) {

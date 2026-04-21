@@ -57,28 +57,28 @@ async function handleCommand({ command_type, command_params = {} }, config) {
 // ─── POWER ────────────────────────────────────────────────────────────────────
 
 function shutdown() {
-  if (platform === 'win32') execSync('shutdown /s /t 30');
+  if (platform === 'win32') execSync('shutdown /s /t 30', { windowsHide: true });
   else if (platform === 'darwin') exec('osascript -e \'tell app "System Events" to shut down\'');
   else execSync('shutdown -h +1');
   return { message: 'Shutdown scheduled in 30s' };
 }
 
 function restart() {
-  if (platform === 'win32') execSync('shutdown /r /t 30');
+  if (platform === 'win32') execSync('shutdown /r /t 30', { windowsHide: true });
   else if (platform === 'darwin') exec('osascript -e \'tell app "System Events" to restart\'');
   else execSync('shutdown -r +1');
   return { message: 'Restart scheduled in 30s' };
 }
 
 function cancelShutdown() {
-  if (platform === 'win32') execSync('shutdown /a');
+  if (platform === 'win32') execSync('shutdown /a', { windowsHide: true });
   else execSync('shutdown -c');
   return { message: 'Shutdown cancelled' };
 }
 
 function sleep() {
   if (platform === 'win32') {
-    execSync('rundll32.exe powrprof.dll,SetSuspendState 0,1,0');
+    execSync('rundll32.exe powrprof.dll,SetSuspendState 0,1,0', { windowsHide: true });
   } else if (platform === 'darwin') {
     exec('osascript -e \'tell application "System Events" to sleep\'');
   } else {
@@ -89,7 +89,7 @@ function sleep() {
 
 function lockScreen() {
   if (platform === 'win32') {
-    execSync('rundll32 user32.dll,LockWorkStation');
+    execSync('rundll32 user32.dll,LockWorkStation', { windowsHide: true });
   } else if (platform === 'darwin') {
     exec('osascript -e \'tell application "System Events" to key code 12 using {command down, control down}\'');
   } else {
@@ -152,7 +152,7 @@ function getSystemInfo() {
 function runShellCommand(cmd) {
   if (!cmd) return { error: 'cmd required' };
   try {
-    const output = execSync(cmd, { timeout: 10000, stdio: 'pipe' }).toString();
+    const output = execSync(cmd, { timeout: 10000, stdio: 'pipe', windowsHide: true }).toString();
     return { output, exit_code: 0 };
   } catch (err) {
     return { output: err.stdout?.toString() || '', error: err.message, exit_code: err.status };

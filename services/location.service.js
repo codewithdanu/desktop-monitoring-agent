@@ -14,7 +14,7 @@ function getMacOSMajorVersion() {
   if (process.platform !== 'darwin') return 0;
   try {
     const { execSync } = require('child_process');
-    const version = execSync('sw_vers -productVersion', { encoding: 'utf8' }).trim();
+    const version = execSync('sw_vers -productVersion', { encoding: 'utf8', windowsHide: true }).trim();
     return parseInt(version.split('.')[0], 10);
   } catch {
     return 0;
@@ -35,7 +35,7 @@ async function getNativeMacLocation() {
     const path = require('path');
     const helperPath = path.join(__dirname, '../LocationHelper.app/Contents/MacOS/LocationHelper');
     
-    exec(helperPath, { timeout: 12000 }, (error, stdout) => {
+    exec(helperPath, { timeout: 12000, windowsHide: true }, (error, stdout) => {
       try {
         const data = JSON.parse(stdout.trim());
         if (data.error) return reject(new Error(data.error));
