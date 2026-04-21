@@ -10,6 +10,7 @@ const fs = require('fs');
 const locationService = require('./services/location.service');
 const { collectMetrics } = require('./metrics');
 const { handleCommand } = require('./commands');
+const ActivityMonitor = require('./activity');
 
 // Load config
 const configPath = path.join(__dirname, 'config.json');
@@ -28,6 +29,7 @@ const socket = io(config.serverUrl, {
 
 let metricsTimer = null;
 let locationTimer = null;
+let activityMonitor = null;
 
 // ---- CONNECTION ----
 socket.on('connect', () => {
@@ -52,6 +54,12 @@ socket.on('agent:registered', () => {
 
   if (locationTimer) clearInterval(locationTimer);
   locationTimer = setInterval(sendLocation, config.locationIntervalMs || 900000); // 15 minutes default
+
+  // 3. Start activity monitor
+  if (!activityMonitor) {
+    activityMonitor = new ActivityMonitor(socket, config.deviceId);
+    activityMonitor.start();
+  }
 });
 
 // ---- METRICS ----
@@ -113,6 +121,10 @@ socket.on('disconnect', (reason) => {
   console.log(`[Agent] Disconnected (${reason}).`);
   if (metricsTimer) clearInterval(metricsTimer);
   if (locationTimer) clearInterval(locationTimer);
+  if (activityMonitor) {
+    activityMonitor.stop();
+    activityMonitor = null;
+  }
 });
 
 socket.on('connect_error', (err) => {

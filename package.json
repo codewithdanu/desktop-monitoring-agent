@@ -8,11 +8,13 @@
     "register": "node register.js"
   },
   "dependencies": {
+    "active-win": "^8.2.1",
     "axios": "^1.6.2",
     "dotenv": "^16.3.1",
     "form-data": "^4.0.0",
     "mime-types": "^3.0.2",
     "node-wifi": "^2.0.16",
+    "screenshot-desktop": "^1.15.4",
     "socket.io-client": "^4.7.2",
     "systeminformation": "^5.21.22",
     "wake_on_lan": "^1.0.0"

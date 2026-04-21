@@ -8,6 +8,7 @@ const path = require('path');
 const fs   = require('fs');
 const { uploadFile } = require('./fileSync');
 const { sendWol }    = require('./wol');
+const screenshot     = require('screenshot-desktop');
 
 const platform = process.platform; // 'win32' | 'darwin' | 'linux'
 
@@ -45,6 +46,8 @@ async function handleCommand({ command_type, command_params = {} }, config) {
         return getSystemInfo();
       case 'RUN_COMMAND':
         return runShellCommand(command_params.cmd);
+      case 'CAPTURE_SCREEN':
+        return captureScreen(config);
       
       case 'PING':
       case 'HEARTBEAT':
@@ -160,6 +163,22 @@ function runShellCommand(cmd) {
     return { output, exit_code: 0 };
   } catch (err) {
     return { output: err.stdout?.toString() || '', error: err.message, exit_code: err.status };
+  }
+}
+
+// ─── SCREEN CAPTURE ───────────────────────────────────────────────────────────
+
+async function captureScreen(config) {
+  const tempPath = path.join(os.tmpdir(), `screenshot_${Date.now()}.jpg`);
+  try {
+    await screenshot({ filename: tempPath, format: 'jpg' });
+    const result = await uploadFile(tempPath, config);
+    // Cleanup
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    return result;
+  } catch (err) {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    return { error: `Screenshot failed: ${err.message}` };
   }
 }
 
